@@ -34,12 +34,12 @@
       const returnOrigin = params.get('returnOrigin') || '';
       const language = params.get('lang') || 'en';
       const text = {
-        en: {title:'Live item scanner', hint:'Point the rear camera at one barcode or QR code. The matching item will be returned to your open Sell or Buy form.', starting:'Starting camera…', ready:'Camera is ready. Center a barcode or QR code in the frame.', found:'Code read. Returning to your form…', failed:'Could not start the camera. Check camera permission and try again.', invalid:'Open this scanner from the Sell or Buy form.', close:'Close scanner'},
-        ps: {title:'ژوندی سکینر', hint:'شا شا کامره بارکوډ یا QR کوډ ته ونیسئ. پېژندل شوی توکی به د پلور یا پېرود فورم ته واستول شي.', starting:'کامره چالانېږي…', ready:'کامره چمتو ده. کوډ د چوکاټ منځ ته ونیسئ.', found:'کوډ ولوستل شو؛ فورم ته لېږل کېږي…', failed:'کامره چالان نه شوه. د کامرې اجازه وګورئ او بیا هڅه وکړئ.', invalid:'دا سکینر د پلور یا پېرود له فورم څخه پرانیزئ.', close:'سکینر بند کړئ'},
-        fa: {title:'اسکنر زنده کالا', hint:'کمره پشتی را مقابل بارکد یا QR بگیرید. کالای شناسایی‌شده به فورم فروش یا خرید بازگردانده می‌شود.', starting:'کمره در حال راه‌اندازی…', ready:'کمره آماده است. کد را در مرکز کادر قرار دهید.', found:'کد خوانده شد؛ به فورم بازمی‌گردد…', failed:'کمره راه‌اندازی نشد. اجازه کمره را بررسی و دوباره تلاش کنید.', invalid:'این اسکنر را از فورم فروش یا خرید باز کنید.', close:'بستن اسکنر'}
+        en: {title:'Live item scanner', hint:'Point the rear camera at each barcode or QR code. Every new scan adds a product row to the open Sell or Buy form.', starting:'Starting camera…', ready:'Camera is ready. Center a barcode or QR code in the frame.', found:'Added {code}. Move it away, then scan the next item.', failed:'Could not start the camera. Check camera permission and try again.', invalid:'Open this scanner from the Sell or Buy form.', close:'Close scanner'},
+        ps: {title:'ژوندی سکینر', hint:'شا شا کامره هر بارکوډ یا QR کوډ ته ونیسئ. هر نوی سکین د پلور یا پېرود فورم ته د توکي نوې کرښه زیاتوي.', starting:'کامره چالانېږي…', ready:'کامره چمتو ده. کوډ د چوکاټ منځ ته ونیسئ.', found:'{code} ورزیات شو. کوډ لرې کړئ او بل توکی سکین کړئ.', failed:'کامره چالان نه شوه. د کامرې اجازه وګورئ او بیا هڅه وکړئ.', invalid:'دا سکینر د پلور یا پېرود له فورم څخه پرانیزئ.', close:'سکینر بند کړئ'},
+        fa: {title:'اسکنر زنده کالا', hint:'کمره پشتی را مقابل هر بارکد یا QR بگیرید. هر اسکن جدید یک ردیف کالا به فورم فروش یا خرید اضافه می‌کند.', starting:'کمره در حال راه‌اندازی…', ready:'کمره آماده است. کد را در مرکز کادر قرار دهید.', found:'{code} اضافه شد. کد را دور کنید و کالای بعدی را اسکن کنید.', failed:'کمره راه‌اندازی نشد. اجازه کمره را بررسی و دوباره تلاش کنید.', invalid:'این اسکنر را از فورم فروش یا خرید باز کنید.', close:'بستن اسکنر'}
       }[language] || null;
       const strings = text || {
-        title:'Live item scanner', hint:'Point the rear camera at one barcode or QR code. The matching item will be returned to your open Sell or Buy form.', starting:'Starting camera…', ready:'Camera is ready. Center a barcode or QR code in the frame.', found:'Code read. Returning to your form…', failed:'Could not start the camera. Check camera permission and try again.', invalid:'Open this scanner from the Sell or Buy form.', close:'Close scanner'
+        title:'Live item scanner', hint:'Point the rear camera at each barcode or QR code. Every new scan adds a product row to the open Sell or Buy form.', starting:'Starting camera…', ready:'Camera is ready. Center a barcode or QR code in the frame.', found:'Added {code}. Move it away, then scan the next item.', failed:'Could not start the camera. Check camera permission and try again.', invalid:'Open this scanner from the Sell or Buy form.', close:'Close scanner'
       };
       document.documentElement.lang = language === 'ps' ? 'ps-AF' : language === 'fa' ? 'fa-AF' : 'en';
       document.documentElement.dir = language === 'en' ? 'ltr' : 'rtl';
@@ -50,13 +50,40 @@
       const status = document.getElementById('status');
       let scanner = null;
       let sent = false;
+      let awaitingResume = false;
+      let lastDetectedCode = '';
+      let lastDetectedAt = 0;
+
+      function sendToParent(message) {
+        if (window.opener && !window.opener.closed) {
+          window.opener.postMessage(Object.assign({session:session}, message), returnOrigin);
+        }
+      }
 
       function closeScanner() {
+        sent = true;
         const stop = scanner && scanner.isScanning ? scanner.stop() : Promise.resolve();
-        Promise.resolve(stop).catch(function() {}).finally(function() { window.close(); });
+        Promise.resolve(stop).catch(function() {}).finally(function() {
+          sendToParent({type:'retail-live-stop'});
+          window.close();
+        });
       }
 
       document.getElementById('close').addEventListener('click', closeScanner);
+      window.addEventListener('message', function(event) {
+        const message = event.data || {};
+        if (event.source !== window.opener || event.origin !== returnOrigin || message.session !== session) return;
+        if (message.type === 'retail-live-stop') {
+          closeScanner();
+        } else if (message.type === 'retail-live-resume' && scanner && awaitingResume && !sent) {
+          awaitingResume = false;
+          try { scanner.resume(); } catch (error) {
+            status.textContent = strings.failed;
+            return;
+          }
+          status.textContent = strings.ready;
+        }
+      });
       if (!session || !window.opener || !/^https:\/\//i.test(returnOrigin) || !window.Html5Qrcode) {
         status.textContent = !window.Html5Qrcode ? strings.failed : strings.invalid;
         return;
@@ -69,19 +96,30 @@
       });
       scanner.start({facingMode:'environment'}, {fps:12, qrbox:{width:280, height:180}}, function(decodedText) {
         if (sent) return;
-        sent = true;
-        status.textContent = strings.found;
-        scanner.stop().catch(function() {}).finally(function() {
-          if (window.opener && !window.opener.closed) {
-            window.opener.postMessage({type:'retail-live-scan', session:session, code:String(decodedText || '').trim()}, returnOrigin);
-          }
-          window.setTimeout(function() { window.close(); }, 250);
-        });
+        const code = String(decodedText || '').trim();
+        const now = Date.now();
+        if (!code || awaitingResume) return;
+        if (code === lastDetectedCode) {
+          lastDetectedAt = now;
+          return;
+        }
+        lastDetectedCode = code;
+        lastDetectedAt = now;
+        awaitingResume = true;
+        status.textContent = strings.found.replace('{code}', code);
+        try { scanner.pause(false); } catch (error) { awaitingResume = false; }
+        sendToParent({type:'retail-live-scan', code:code});
       }, function() {}).then(function() {
         if (!sent) status.textContent = strings.ready;
       }).catch(function() {
         status.textContent = strings.failed;
       });
+
+      // Debounce a barcode held in frame, but allow rescanning it once removed.
+      const rearmTimer = window.setInterval(function() {
+        if (!awaitingResume && lastDetectedCode && Date.now() - lastDetectedAt > 1100) lastDetectedCode = '';
+      }, 250);
+      window.addEventListener('beforeunload', function() { window.clearInterval(rearmTimer); });
     })();
   </script>
 </body>
